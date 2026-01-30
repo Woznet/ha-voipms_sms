@@ -6,7 +6,7 @@ send_sms:
       name: Recipient Number
       description: The phone number of the recipient in international format (e.g., 15551234567).
       required: true
-      example: "15551234567"
+      example: "5551234567"
       selector:
         text:
     message:
@@ -24,7 +24,7 @@ send_mms:
       name: Recipient Number
       description: The phone number of the recipient in international format (e.g., 15551234567).
       required: true
-      example: "15551234567"
+      example: "5551234567"
       selector:
         text:
     message:
