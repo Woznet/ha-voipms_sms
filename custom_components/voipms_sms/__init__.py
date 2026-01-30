@@ -1,138 +1,149 @@
-import logging
-import aiohttp
 import asyncio
 import base64
-import os
+import logging
 import mimetypes
+import os
+
+import aiohttp
 import voluptuous as vol
+
 import homeassistant.helpers.config_validation as cv
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+DOMAIN = "voipms_sms"
 _LOGGER = logging.getLogger(__name__)
-
-# Define configuration schema
-CONFIG_SCHEMA = vol.Schema({
-    "account_user": cv.string,
-    "api_password": cv.string,
-    "sender_did": cv.string,
-}, extra=vol.ALLOW_EXTRA)
 
 REST_ENDPOINT = "https://voip.ms/api/v1/rest.php"
 
-async def get_base64_data(image_path):
-    def encode():
+SERVICE_SEND_SMS = "send_sms"
+SERVICE_SEND_MMS = "send_mms"
+
+CONF_ACCOUNT_USER = "account_user"
+CONF_API_PASSWORD = "api_password"
+CONF_SENDER_DID = "sender_did"
+
+# YAML configuration schema (domain-keyed)
+CONFIG_SCHEMA = vol.Schema(
+    {
+        DOMAIN: vol.Schema(
+            {
+                vol.Required(CONF_ACCOUNT_USER): cv.string,
+                vol.Required(CONF_API_PASSWORD): cv.string,
+                vol.Required(CONF_SENDER_DID): cv.string,
+            }
+        )
+    },
+    extra=vol.ALLOW_EXTRA,
+)
+
+SERVICE_SCHEMA_SMS = vol.Schema(
+    {
+        vol.Required("recipient"): cv.string,
+        vol.Required("message"): cv.string,
+    }
+)
+
+SERVICE_SCHEMA_MMS = vol.Schema(
+    {
+        vol.Required("recipient"): cv.string,
+        vol.Required("message"): cv.string,
+        vol.Required("image_path"): cv.string,
+    }
+)
+
+
+async def _get_base64_data(image_path: str) -> str:
+    def encode() -> str:
         mime_type, _ = mimetypes.guess_type(image_path)
         if not mime_type:
-            mime_type = 'application/octet-stream'
-        with open(image_path, 'rb') as f:
+            mime_type = "application/octet-stream"
+        with open(image_path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode()
         return f"data:{mime_type};base64,{encoded}"
+
     return await asyncio.to_thread(encode)
 
-async def async_setup_entry(hass: HomeAssistant, entry):
-    """Set up VoIP.ms SMS from a config entry."""
-    return await async_setup(hass, {entry.domain: entry.data})
 
-# ...existing imports...
-async def send_sms(hass, user, password, sender_did, call):
-    """Send SMS message using multipart form-data like MMS."""
-    _LOGGER = logging.getLogger(__name__)
+async def _post_voipms(hass: HomeAssistant, form_fields: dict) -> tuple[int, str]:
+    session = async_get_clientsession(hass)
+
+    timeout = aiohttp.ClientTimeout(total=30)
+    with aiohttp.MultipartWriter("form-data") as mp:
+        for key, value in form_fields.items():
+            part = mp.append(str(value))
+            part.set_content_disposition("form-data", name=key)
+
+        async with session.post(REST_ENDPOINT, data=mp, timeout=timeout) as resp:
+            text = await resp.text()
+            return resp.status, text
+
+
+async def _handle_send_sms(hass: HomeAssistant, conf: dict, call: ServiceCall) -> None:
     recipient = call.data.get("recipient")
     message = call.data.get("message")
 
-    if not recipient or not message:
-        _LOGGER.error("Recipient or message missing.")
-        return
-
-    # Build form data dictionary
     form_data = {
-        'api_username': str(user),
-        'api_password': str(password),
-        'did': str(sender_did),
-        'dst': str(recipient),
-        'message': str(message),
-        'method': 'sendSMS'
+        "api_username": conf[CONF_ACCOUNT_USER],
+        "api_password": conf[CONF_API_PASSWORD],
+        "did": conf[CONF_SENDER_DID],
+        "dst": recipient,
+        "message": message,
+        "method": "sendSMS",
     }
 
-    async with aiohttp.ClientSession() as session:
-        with aiohttp.MultipartWriter("form-data") as mp:
-            for key, value in form_data.items():
-                part = mp.append(value)
-                part.set_content_disposition('form-data', name=key)
+    status, body = await _post_voipms(hass, form_data)
 
-            async with session.post(REST_ENDPOINT, data=mp) as response:
-                response_text = await response.text()
-
-                if response.status == 200:
-                    _LOGGER.info("voipms_sms: SMS sent successfully: %s", response_text)
-                else:
-                    _LOGGER.error("voipms_sms: Failed to send SMS. Status: %s, Response: %s", response.status, response_text)
+    if status == 200:
+        _LOGGER.info("voipms_sms: sendSMS response: %s", body)
+    else:
+        _LOGGER.error("voipms_sms: sendSMS failed (%s): %s", status, body)
 
 
-async def send_mms(hass, user, password, sender_did, call):
-    """Send MMS using VoIP.ms API."""
-    _LOGGER = logging.getLogger(__name__)
+async def _handle_send_mms(hass: HomeAssistant, conf: dict, call: ServiceCall) -> None:
     recipient = call.data.get("recipient")
     message = call.data.get("message")
     image_path = call.data.get("image_path")
-
-    if not recipient or not message or not image_path:
-        _LOGGER.error("voipms_sms: Required parameter missing (Recipient or message or image path)")
-        return
 
     if not os.path.exists(image_path):
         _LOGGER.error("voipms_sms: Image file not found: %s", image_path)
         return
 
-    media_data = await get_base64_data(image_path)
+    media_data = await _get_base64_data(image_path)
 
     form_data = {
-        'api_username': str(user), 
-        'api_password': str(password),
-        'did': str(sender_did),
-        'dst': str(recipient),
-        'message': str(message),
-        'method': str('sendMMS'),
-        'media1': str(media_data)
+        "api_username": conf[CONF_ACCOUNT_USER],
+        "api_password": conf[CONF_API_PASSWORD],
+        "did": conf[CONF_SENDER_DID],
+        "dst": recipient,
+        "message": message,
+        "method": "sendMMS",
+        "media1": media_data,
     }
 
-    async with aiohttp.ClientSession() as session:
-        with aiohttp.MultipartWriter("form-data") as mp:
-            for key, value in form_data.items():
-                part = mp.append(value)
-                part.set_content_disposition('form-data', name=key)
+    status, body = await _post_voipms(hass, form_data)
 
-        async with session.post(REST_ENDPOINT, data=mp) as response:
-            response_text = await response.text()
-            if response.status == 200:
-                _LOGGER.info("voipms_sms: MMS sent successfully: %s", response_text)
-            else:
-                _LOGGER.error("voipms_sms: Failed to send MMS. Status: %s, Response: %s", response.status, response_text)
+    if status == 200:
+        _LOGGER.info("voipms_sms: sendMMS response: %s", body)
+    else:
+        _LOGGER.error("voipms_sms: sendMMS failed (%s): %s", status, body)
 
 
-async def async_setup(hass: HomeAssistant, config: dict):
-    """Set up the VoIP.ms SMS integration."""
-    conf = config.get("voipms_sms", {})
-    user = conf.get("account_user")
-    password = conf.get("api_password")
-    sender_did = conf.get("sender_did")
+async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+    """Set up the VoIP.ms SMS integration (YAML)."""
+    if DOMAIN not in config:
+        return True
 
-    if not user or not password or not sender_did:
-        _LOGGER.error("Missing required configuration fields.")
-        return False  # Explicit failure
+    conf = config[DOMAIN]
 
-    async def handle_send_sms(call):
-        await send_sms(hass, user, password, sender_did, call)
+    async def handle_send_sms(call: ServiceCall) -> None:
+        await _handle_send_sms(hass, conf, call)
 
-    async def handle_send_mms(call):
-        await send_mms(hass, user, password, sender_did, call)
+    async def handle_send_mms(call: ServiceCall) -> None:
+        await _handle_send_mms(hass, conf, call)
 
-    hass.services.async_register(
-        "voipms_sms", "send_sms", handle_send_sms
-    )
-    hass.services.async_register(
-        "voipms_sms", "send_mms", handle_send_mms
-    )
+    hass.services.async_register(DOMAIN, SERVICE_SEND_SMS, handle_send_sms, schema=SERVICE_SCHEMA_SMS)
+    hass.services.async_register(DOMAIN, SERVICE_SEND_MMS, handle_send_mms, schema=SERVICE_SCHEMA_MMS)
 
-    _LOGGER.info("voipms_sms: VoIP.ms SMS/MMS services registered successfully.")
-    return True  # Explicit success
+    _LOGGER.info("voipms_sms: services registered (%s.%s, %s.%s)", DOMAIN, SERVICE_SEND_SMS, DOMAIN, SERVICE_SEND_MMS)
+    return True
