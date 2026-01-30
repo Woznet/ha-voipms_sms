@@ -41,4 +41,4 @@ send_mms:
       example: "/config/www/camera_snapshot.jpg"
       selector:
         text:
-          
+
