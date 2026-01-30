@@ -1,12 +1,12 @@
 {
     "domain": "voipms_sms",
     "name": "VoIP.ms SMS",
-    "version": "1.0",
-    "documentation": "https://github.com/cdonner/ha-voipms_sms",
-    "issue_tracker": "https://github.com/cdonner/ha-voipms_sms/issues",
+    "version": "1.1",
+    "documentation": "https://github.com/woznet/ha-voipms_sms",
+    "issue_tracker": "https://github.com/woznet/ha-voipms_sms/issues",
     "dependencies": [],
     "codeowners": [
-        "@cdonner"
+        "@Woznet"
     ],
     "requirements": [],  
     "iot_class": "cloud_polling",
