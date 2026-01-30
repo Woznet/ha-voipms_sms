@@ -1,44 +1,44 @@
 send_sms:
   name: Send SMS
-  description: Send an SMS message via VoIP.ms.
+  description: Send an SMS message via VoIP.ms (US/Canada only).
   fields:
     recipient:
       name: Recipient Number
-      description: The phone number of the recipient in international format (e.g., 15551234567).
+      description: The destination phone number as a US or Canadian 10-digit number (digits only, no country code). Example: 5551234567.
       required: true
       example: "5551234567"
       selector:
         text:
     message:
       name: Message
-      description: The text message to send.
+      description: The SMS text to send (maximum 2048 characters).
       required: true
       example: "Hello from Home Assistant!"
       selector:
         text:
+
 send_mms:
   name: Send MMS
-  description: Send an MMS message with image via VoIP.ms.
+  description: Send an MMS message with a single attachment via VoIP.ms (US/Canada only).
   fields:
     recipient:
       name: Recipient Number
-      description: The phone number of the recipient in international format (e.g., 15551234567).
+      description: The destination phone number as a US or Canadian 10-digit number (digits only, no country code). Example: 5551234567.
       required: true
       example: "5551234567"
       selector:
         text:
     message:
       name: Message
-      description: The text message to send.
+      description: The MMS text to send (maximum 2048 characters).
       required: true
       example: "Hello from Home Assistant!"
       selector:
         text:
     image_path:
-      name: Absolute path to image file 
-      description: The path to a previously saved image, e.g. the snapshot image from a security camera.
+      name: Absolute path to image file
+      description: Path to a single attachment (JPG, JPEG, PNG, GIF, MP3, WAV, MIDI, MP4, or 3GP; max 1.3 MB).
       required: true
       example: "/config/www/camera_snapshot.jpg"
       selector:
         text:
-
