@@ -4,6 +4,7 @@ import json
 import logging
 import mimetypes
 import re
+import stat
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -100,7 +101,7 @@ def _validate_recipient(recipient_digits: str) -> bool:
 def _parse_voipms_response(body: str) -> dict[str, Any] | None:
     try:
         return json.loads(body)
-    except Exception:
+    except (ValueError, TypeError):
         return None
 
 
@@ -140,21 +141,21 @@ def _validate_attachments(paths: Iterable[str]) -> tuple[bool, str]:
             return False, f"Attachment path must be absolute: {p}"
 
         try:
-            stat = path.stat()  # Single call - atomic check
+            st = path.stat()  # Single call - atomic check
         except FileNotFoundError:
             return False, f"Attachment file not found: {p}"
         except OSError as e:
             return False, f"Failed to access attachment file: {p} ({e})"
 
-        if not stat.st_mode & 0o100000:  # S_IFREG - is regular file
+        if not stat.S_ISREG(st.st_mode):
             return False, f"Attachment path is not a file: {p}"
 
         ext = path.suffix.lower()
         if ext not in MMS_ALLOWED_EXTS:
             return False, f"Unsupported attachment type '{ext}' for file: {p}"
 
-        if stat.st_size > MMS_MAX_BYTES:
-            return False, f"Attachment too large ({stat.st_size} bytes > {MMS_MAX_BYTES} bytes): {p}"
+        if st.st_size > MMS_MAX_BYTES:
+            return False, f"Attachment too large ({st.st_size} bytes > {MMS_MAX_BYTES} bytes): {p}"
 
     return True, ""
 
@@ -177,7 +178,7 @@ async def _get_base64_data(path: str) -> str:
     return await asyncio.to_thread(encode)
 
 
-async def _post_voipms(hass: HomeAssistant, form_fields: dict) -> tuple[int, str]:
+async def _post_voipms(hass: HomeAssistant, form_fields: dict[str, Any]) -> tuple[int, str]:
     session = async_get_clientsession(hass)
     timeout = aiohttp.ClientTimeout(total=30)
 
@@ -190,7 +191,7 @@ async def _post_voipms(hass: HomeAssistant, form_fields: dict) -> tuple[int, str
             return resp.status, await resp.text()
 
 
-async def _send_sms_once(hass: HomeAssistant, conf: dict, recipient: str, message: str) -> bool:
+async def _send_sms_once(hass: HomeAssistant, conf: dict[str, Any], recipient: str, message: str) -> bool:
     sender_did = re.sub(r"\D", "", str(conf.get(CONF_SENDER_DID, "")).strip())
     form_data = {
         "api_username": conf[CONF_ACCOUNT_USER],
@@ -231,7 +232,7 @@ async def _send_sms_once(hass: HomeAssistant, conf: dict, recipient: str, messag
 
 async def _send_mms_once(
     hass: HomeAssistant,
-    conf: dict,
+    conf: dict[str, Any],
     recipient: str,
     message: str,
     attachments: list[str],
@@ -249,7 +250,11 @@ async def _send_mms_once(
 
     if attachments:
         for idx, path in enumerate(attachments[:MMS_MAX_ATTACHMENTS], start=1):
-            media_data = await _get_base64_data(path)
+            try:
+                media_data = await _get_base64_data(path)
+            except OSError:
+                _LOGGER.exception("voipms_sms: Failed to read attachment %s (to=%s)", path, _mask_recipient(recipient))
+                return False
             form_data[f"media{idx}"] = media_data
 
     try:
@@ -282,7 +287,7 @@ async def _send_mms_once(
 
 async def _dispatch_single_recipient(
     hass: HomeAssistant,
-    conf: dict,
+    conf: dict[str, Any],
     recipient: str,
     message: str,
     attachments: list[str],
@@ -350,7 +355,7 @@ async def _dispatch_single_recipient(
     return True
 
 
-async def _handle_send_message(hass: HomeAssistant, conf: dict, call: ServiceCall) -> None:
+async def _handle_send_message(hass: HomeAssistant, conf: dict[str, Any], call: ServiceCall) -> None:
     recipients_raw = call.data.get("recipient")
     message_raw = call.data.get("message")
 
@@ -378,7 +383,7 @@ async def _handle_send_message(hass: HomeAssistant, conf: dict, call: ServiceCal
 
     attachments = _coerce_attachments(call)
     if attachments:
-        ok, err = _validate_attachments(attachments)
+        ok, err = await hass.async_add_executor_job(_validate_attachments, attachments)
         if not ok:
             _LOGGER.error("voipms_sms: Attachment validation failed: %s", err)
             return
@@ -433,14 +438,15 @@ async def _handle_send_message(hass: HomeAssistant, conf: dict, call: ServiceCal
     _LOGGER.info("voipms_sms: send_message complete (success=%s failed=%s)", successes, failures)
 
 
-async def async_setup(hass: HomeAssistant, config: dict) -> bool:
+async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     if DOMAIN not in config:
         return True
 
-    conf = config[DOMAIN]
+    conf: dict[str, Any] = dict(config[DOMAIN])
+    hass.data[DOMAIN] = conf
 
     async def handle_send_message(call: ServiceCall) -> None:
-        await _handle_send_message(hass, conf, call)
+        await _handle_send_message(hass, hass.data[DOMAIN], call)
 
     hass.services.async_register(
         DOMAIN,

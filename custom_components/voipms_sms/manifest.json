@@ -1,7 +1,7 @@
 {
     "domain": "voipms_sms",
     "name": "VoIP.ms SMS",
-    "version": "1.1",
+    "version": "1.2",
     "documentation": "https://github.com/woznet/ha-voipms_sms",
     "issue_tracker": "https://github.com/woznet/ha-voipms_sms/issues",
     "dependencies": [],
