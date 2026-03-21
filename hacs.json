@@ -1,3 +1,4 @@
 {
-    "name": "Voip.ms Integration for sending SMS/MMS"
+    "name": "Voip.ms Integration for sending SMS/MMS",
+    "render_readme": true
 }
